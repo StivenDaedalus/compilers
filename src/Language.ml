@@ -43,36 +43,8 @@ module Expr =
  
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
-     *)                                                       
-    let int2bool x = x !=0
-    let bool2int x = if x then 1 else 0
-
-    let binop operation left_op right_op =
-	match operation with
-        | "+" -> left_op + right_op
-        | "-" -> left_op - right_op
-        | "*" -> left_op * right_op
-        | "/" -> left_op / right_op
-        | "%" -> left_op mod right_op
-        | "<" -> bool2int (left_op < right_op)
-        | ">" -> bool2int (left_op > right_op)
-        | "<=" -> bool2int (left_op <= right_op)
-        | ">=" -> bool2int (left_op >= right_op)
-        | "==" -> bool2int (left_op == right_op)
-        | "!=" -> bool2int (left_op != right_op)
-        | "&&" -> bool2int (int2bool left_op && int2bool right_op)
-        | "!!" -> bool2int (int2bool left_op || int2bool right_op)
-        | _ -> failwith "Not implemented yet"
-  
-
-    let rec eval state expr = 
-        match expr with
-        | Const c -> c
-        | Var v -> state v
-        | Binop (operation, left_expr, right_expr) ->
-        let left_op = eval state left_expr in
-        let right_op = eval state right_expr in
-        binop operation left_op right_op
+    *)                                                       
+    let eval st expr = failwith "Not yet implemented"
 
     (* Expression parser. You can use the following terminals:
 
@@ -80,22 +52,8 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
                                                                                                                   
     *)
-    let binop_transforming binoplist = List.map (fun op -> ostap($(op)), (fun left_op right_op -> Binop (op, left_op, right_op))) binoplist
     ostap (                                      
-      parse:
-	  !(Ostap.Util.expr
-          (fun x -> x)
-          [|
-            `Lefta, binop_transforming ["!!"];
-            `Lefta, binop_transforming ["&&"];
-            `Nona,  binop_transforming [">="; ">"; "<="; "<"; "=="; "!="];
-            `Lefta, binop_transforming ["+"; "-"];
-            `Lefta, binop_transforming ["*"; "/"; "%"]
-          |]
-	
-	primary
-	);
-        primary: x:IDENT {Var x} | c:DECIMAL {Const c} | -"(" parse -")"
+      parse: empty {failwith "Not yet implemented"}
     )
     
   end
@@ -109,8 +67,12 @@ module Stmt =
     (* read into the variable           *) | Read   of string
     (* write the value of an expression *) | Write  of Expr.t
     (* assignment                       *) | Assign of string * Expr.t
-    (* composition                      *) | Seq    of t * t with show
-
+    (* composition                      *) | Seq    of t * t 
+    (* empty statement                  *) | Skip
+    (* conditional                      *) | If     of Expr.t * t * t
+    (* loop with a pre-condition        *) | While  of Expr.t * t
+    (* loop with a post-condition       *) (* add yourself *)  with show
+                                                                    
     (* The type of configuration: a state, an input stream, an output stream *)
     type config = Expr.state * int list * int list 
 
@@ -120,24 +82,11 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let rec eval (state, input, output) stmt = 
-        match stmt with
-        | Assign (x, expr) -> (Expr.update x (Expr.eval state expr) state, input, output)
-        | Read (x) -> 
-                (match input with
-                | z::tail -> (Expr.update x z state, tail, output)
-                | [] -> failwith "Empty input stream")
-        | Write (expr) -> (state, input, output @ [(Expr.eval state expr)])
-        | Seq (frts_stmt, scnd_stmt) -> (eval (eval (state, input, output) frts_stmt ) scnd_stmt)
-                                
+    let rec eval conf stmt = failwith "Not yet implemented"
+                               
     (* Statement parser *)
     ostap (
-      parse: seq | stmt;
-      stmt: assign | read | write;
-      assign: x:IDENT -":=" expr:!(Expr.parse) {Assign (x, expr)};
-      read: -"read" -"(" x:IDENT -")" {Read x};
-      write: -"write" -"("expr:!(Expr.parse) -")" {Write expr};
-      seq: frts_stmt:stmt -";" scnd_stmt:parse {Seq (frts_stmt, scnd_stmt)}           
+      parse: empty {failwith "Not yet implemented"}
     )
       
   end
