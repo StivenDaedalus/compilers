@@ -95,8 +95,9 @@ let compare_op cop =
     | "==" -> "e"
     | "!=" -> "ne"
 
+
 let rec compile env code = 
-	let compile_eval env asm = 
+       	let compile_eval env asm =
 		match asm with
 		| CONST n -> 
 			let e, env = env#allocate in 

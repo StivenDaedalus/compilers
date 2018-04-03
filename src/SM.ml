@@ -28,8 +28,36 @@ type config = int list * Stmt.config
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
 *)                         
-let rec eval env conf prog = failwith "Not yet implemented"
-
+let rec eval env conf prog =
+        match prog with
+        | [] -> conf
+        |inst::tail -> (
+                match conf, inst with
+                | (y::x::stack, tm_conf), BINOP operation -> 
+                        let value = Language.Expr.binop operation x y in
+                        eval env (value::stack, tm_conf) tail
+                | (stack, tm_conf), CONST value ->
+                        eval env (value::stack, tm_conf) tail
+		| (stack, (st, z::input, output)), READ -> 
+                        eval env (z::stack, (st, input, output)) tail
+                | (z::stack, (st, input, output)), WRITE -> 
+                        eval env (stack, (st, input, output @ [z])) tail
+		| (stack, (st, input, output)), LD x -> 
+                        let value = st x in
+                        eval env (value::stack, (st, input, output)) tail
+                | (z::stack, (st, input, output)), ST x -> 
+			let stt = Language.Expr.update x z st in
+                        eval env (stack, (stt, input, output)) tail
+                | conf, LABEL label -> eval env conf tail
+                | (z::stack, tm_conf), CJMP (suf, label) ->
+                        match suf with
+                        | "z" -> if z == 0 then eval env (stack, tm_conf) (env#labeled label)
+                                 else eval env (stack, tm_conf) tail
+                        | "nz" -> if z <> 0 then eval env (stack, tm_conf) (env#labeled label)
+                                  else eval env (stack, tm_conf) tail
+                        | _ -> failwith("Undefined suffix!")
+                | _ -> failwith("Undefined operation!")
+        )
 (* Top-level evaluation
 
      val run : prg -> int list -> int list
@@ -53,4 +81,45 @@ let run p i =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-let compile p = failwith "Not yet implemented"
+let rec compileExpr expr = 
+        match expr with
+        | Language.Expr.Const c -> [CONST c]
+        | Language.Expr.Var x -> [LD x]
+        | Language.Expr.Binop (operation, left_op, right_op) -> compileExpr left_op @ compileExpr right_op @ [BINOP operation]
+
+
+let rec compileControl st env = 
+        match st with
+        | Language.Stmt.Assign (x, expr) -> compileExpr expr @ [ST x], env
+        | Language.Stmt.Read x -> [READ; ST x], env
+        | Language.Stmt.Write expr -> compileExpr expr @ [WRITE], env
+        | Language.Stmt.Seq (frts_stmt, scnd_stmt) -> 
+                let frts_stmt, env = compileControl frts_stmt env in
+                let scnd_stmt, env = compileControl scnd_stmt env in
+                 frts_stmt @ scnd_stmt, env
+        | Language.Stmt.Skip -> [], env
+        | Language.Stmt.If (expr, frts_stmt, scnd_stmt) ->
+                let label_else, env = env#generate in
+                let label_fi, env = env#generate in
+                let fr_compile, env = compileControl frts_stmt env in
+		let sc_compile, env = compileControl scnd_stmt env in
+                compileExpr expr @ [CJMP ("z", label_else)] @ fr_compile @ [JMP label_fi; LABEL label_else] @ sc_compile @ [LABEL label_fi], env
+        | Language.Stmt.While (expr, st) ->
+                let label_check, env = env#generate in
+                let label_loop, env = env#generate in
+                let while_body, env = compileControl st env in
+                [JMP label_check; LABEL label_loop] @ while_body @ [LABEL label_check] @ compileExpr expr @ [CJMP ("nz", label_loop)], env
+        | Language.Stmt.Repeat (expr, st) ->(
+                let label_loop, env = env#generate in
+                let repeat_body, env = compileControl st env in
+                [LABEL label_loop] @ repeat_body @ compileExpr expr @ [CJMP ("z", label_loop)]), env
+
+let compile stmt = 
+        let env = object
+        val count_label = 0
+        method generate = "LABEL_" ^ string_of_int count_label, {< count_label = count_label + 1 >}
+        end in
+        let prg, _ = compileControl stmt env in
+        prg
+    
+
