@@ -36,30 +36,48 @@ let rec eval env conf prog =
         | [] -> conf
         |inst::tail -> (
                 match conf, inst with
-                | (y::x::stack, tm_conf), BINOP operation -> 
+                | (cstack, y::x::stack, tm_conf), BINOP operation -> 
                         let value = Language.Expr.binop operation x y in
-                        eval env (value::stack, tm_conf) tail
-                | (stack, tm_conf), CONST value ->
-                        eval env (value::stack, tm_conf) tail
-		| (stack, (st, z::input, output)), READ -> 
-                        eval env (z::stack, (st, input, output)) tail
-                | (z::stack, (st, input, output)), WRITE -> 
-                        eval env (stack, (st, input, output @ [z])) tail
-		| (stack, (st, input, output)), LD x -> 
-                        let value = st x in
-                        eval env (value::stack, (st, input, output)) tail
-                | (z::stack, (st, input, output)), ST x -> 
-			let stt = Language.Expr.update x z st in
-                        eval env (stack, (stt, input, output)) tail
+                        eval env (cstack, value::stack, tm_conf) tail
+                | (cstack, stack, tm_conf), CONST value ->
+                        eval env (cstack, value::stack, tm_conf) tail
+		| (cstack, stack, (st, z::input, output)), READ -> 
+                        eval env (cstack, z::stack, (st, input, output)) tail
+                | (cstack, z::stack, (st, input, output)), WRITE -> 
+                        eval env (cstack, stack, (st, input, output @ [z])) tail
+		| (cstack, stack, (st, input, output)), LD x -> 
+                        let value = State.eval st x in
+                        eval env (cstack, value::stack, (st, input, output)) tail
+                | (cstack, z::stack, (st, input, output)), ST x -> 
+			let stt = State.update x z st in
+                        eval env (cstack, stack, (stt, input, output)) tail
                 | conf, LABEL label -> eval env conf tail
-                | (z::stack, tm_conf), CJMP (suf, label) ->
+                | conf, JMP label -> eval env conf (env#labeled label)
+                | (cstack, z::stack, tm_conf), CJMP (suf, label) -> (
                         match suf with
-                        | "z" -> if z == 0 then eval env (stack, tm_conf) (env#labeled label)
-                                 else eval env (stack, tm_conf) tail
-                        | "nz" -> if z <> 0 then eval env (stack, tm_conf) (env#labeled label)
-                                  else eval env (stack, tm_conf) tail
+                        | "z" -> if z == 0 then eval env (cstack, stack, tm_conf) (env#labeled label)
+                                 else eval env (cstack, stack, tm_conf) tail
+                        | "nz" -> if z <> 0 then eval env (cstack, stack, tm_conf) (env#labeled label)
+                                  else eval env (cstack, stack, tm_conf) tail
                         | _ -> failwith("Undefined suffix!")
-                | _ -> failwith("Undefined operation!")
+                )
+                | (cstack, stack, (st, input, output)), CALL name -> eval env ((tail, st)::cstack, stack,(st, input, output)) (env#labeled name)
+                | (cstack, stack, (st, input, output)), BEGIN (args, locals) -> 
+                        let rec associate st args stack =
+                                match args, stack with
+                                | arg::args', z::stack' ->
+                                       let st', stack'' = associate st args' stack' in
+                                       (State.update arg z st', stack'')
+                                | [], stack' -> (st, stack') in
+                        let st', stack' = associate (State.enter st (args @ locals)) args stack in
+                        eval env (cstack, stack',(st',input, output)) tail	
+                | (cstack, stack, (st, input, output)), END -> (
+                        match cstack with
+                        | (tail', st')::cstack' -> 
+                               eval env (cstack', stack, (State.leave st st', input, output)) tail'
+                        | [] -> conf
+                )
+                
         )
 (* Top-level evaluation
 
@@ -116,13 +134,21 @@ let rec compileControl st env =
                 let label_loop, env = env#generate in
                 let repeat_body, env = compileControl st env in
                 [LABEL label_loop] @ repeat_body @ compileExpr expr @ [CJMP ("z", label_loop)]), env
+        | Language.Stmt.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL name], env
 
-let compile stmt = 
+let compile (defs, stmt) = 
         let env = object
         val count_label = 0
         method generate = "LABEL_" ^ string_of_int count_label, {< count_label = count_label + 1 >}
         end in
-        let prg, _ = compileControl stmt env in
-        prg
+        let prg, env = compileControl stmt env in
+        let rec compile_defs env defs =
+                match defs with
+                | (name, (args, locals, body))::defs' ->
+                    let body_defs, env = compile_defs env defs' in
+                    [LABEL name; BEGIN (args, locals)] @ compile_body @ [END] @ body_defs, env
+                | [] -> [], env in
+        let cdefs, _ = compile_defs env defs in
+        prog @ [END] @ cdefs
     
 
