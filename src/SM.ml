@@ -146,9 +146,10 @@ let compile (defs, stmt) =
                 match defs with
                 | (name, (args, locals, body))::defs' ->
                     let body_defs, env = compile_defs env defs' in
+                    let compile_body, env = compileControl body env in
                     [LABEL name; BEGIN (args, locals)] @ compile_body @ [END] @ body_defs, env
                 | [] -> [], env in
         let cdefs, _ = compile_defs env defs in
-        prog @ [END] @ cdefs
+        prg @ [END] @ cdefs
     
 

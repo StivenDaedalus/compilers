@@ -90,7 +90,7 @@ module Expr =
     let rec eval state expr = 
         match expr with
         | Const c -> c
-        | Var v -> state v
+        | Var v -> State.eval state v
         | Binop (operation, left_expr, right_expr) ->
         let left_op = eval state left_expr in
         let right_op = eval state right_expr in
