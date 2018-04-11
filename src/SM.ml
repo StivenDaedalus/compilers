@@ -108,6 +108,7 @@ let rec compileExpr expr =
         | Language.Expr.Const c -> [CONST c]
         | Language.Expr.Var x -> [LD x]
         | Language.Expr.Binop (operation, left_op, right_op) -> compileExpr left_op @ compileExpr right_op @ [BINOP operation]
+        | Language.Expr.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL name]
 
 
 let rec compileControl st env = 
@@ -131,11 +132,15 @@ let rec compileControl st env =
                 let label_loop, env = env#generate in
                 let while_body, env = compileControl st env in
                 [JMP label_check; LABEL label_loop] @ while_body @ [LABEL label_check] @ compileExpr expr @ [CJMP ("nz", label_loop)], env
-        | Language.Stmt.Repeat (expr, st) ->(
+        | Language.Stmt.Repeat (st, expr) ->(
                 let label_loop, env = env#generate in
                 let repeat_body, env = compileControl st env in
                 [LABEL label_loop] @ repeat_body @ compileExpr expr @ [CJMP ("z", label_loop)]), env
         | Language.Stmt.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL name], env
+        | Language.Stmt.Return expr ->
+          match expr with
+          | None -> [END], env
+          | Some expr -> compileExpr expr @ [END], env
 
 let compile (defs, stmt) = 
         let env = object
