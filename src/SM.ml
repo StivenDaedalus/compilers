@@ -18,11 +18,11 @@ open Language
                                                    
 (* The type for the stack machine program *)                                                               
 type prg = insn list
-
+                            
 (* The type for the stack machine configuration: control stack, stack and configuration from statement
    interpreter
  *)
-type config = (prg * State.t) list * int list * Stmt.config
+type config = (prg * State.t) list * int list * Expr.config
 
 (* Stack machine interpreter
 
@@ -86,6 +86,7 @@ let rec eval env conf prog =
    Takes a program, an input stream, and returns an output stream this program calculates
 *)
 let run p i =
+  (*print_prg p;*)
   let module M = Map.Make (String) in
   let rec make_map m = function
   | []              -> m
