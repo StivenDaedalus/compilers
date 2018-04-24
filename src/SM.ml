@@ -64,8 +64,8 @@ let rec eval env conf prog =
                                   else eval env (cstack, stack, tm_conf) tail
                         | _ -> failwith("Undefined suffix!")
                 )
-                | (cstack, stack, (st, input, output)), CALL name -> eval env ((tail, st)::cstack, stack,(st, input, output)) (env#labeled name)
-                | (cstack, stack, (st, input, output)), BEGIN (args, locals) -> 
+                | (cstack, stack, (st, input, output)), CALL (name, _ , _) -> eval env ((tail, st)::cstack, stack,(st, input, output)) (env#labeled name)
+                | (cstack, stack, (st, input, output)), BEGIN (_, args, locals) -> 
                         let rec associate st args stack =
                                 match args, stack with
                                 | arg::args', z::stack' ->
@@ -74,7 +74,7 @@ let rec eval env conf prog =
                                 | [], stack' -> (st, stack') in
                         let st', stack' = associate (State.enter st (args @ locals)) args stack in
                         eval env (cstack, stack',(st',input, output)) tail	
-                | (cstack, stack, (st, input, output)), END -> (
+                | (cstack, stack, (st, input, output)), END | (cstack, stack, (st, input, output)), RET _-> (
                         match cstack with
                         | (tail', st')::cstack' -> 
                                eval env (cstack', stack, (State.leave st st', input, output)) tail'
@@ -111,7 +111,7 @@ let rec compileExpr expr =
         | Language.Expr.Const c -> [CONST c]
         | Language.Expr.Var x -> [LD x]
         | Language.Expr.Binop (operation, left_op, right_op) -> compileExpr left_op @ compileExpr right_op @ [BINOP operation]
-        | Language.Expr.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL name]
+        | Language.Expr.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL (name, List.length args, false)]
 
 
 let rec compileControl st env = 
@@ -139,11 +139,11 @@ let rec compileControl st env =
                 let label_loop, env = env#generate in
                 let repeat_body, env = compileControl st env in
                 [LABEL label_loop] @ repeat_body @ compileExpr expr @ [CJMP ("z", label_loop)]), env
-        | Language.Stmt.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL name], env
+        | Language.Stmt.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL (name, List.length args, true)], env
         | Language.Stmt.Return expr ->
           match expr with
-          | None -> [END], env
-          | Some expr -> compileExpr expr @ [END], env
+          | None -> [RET false], env
+          | Some expr -> compileExpr expr @ [RET true], env
 
 let compile (defs, stmt) = 
         let env = object
@@ -156,7 +156,7 @@ let compile (defs, stmt) =
                 | (name, (args, locals, body))::defs' ->
                     let body_defs, env = compile_defs env defs' in
                     let compile_body, env = compileControl body env in
-                    [LABEL name; BEGIN (args, locals)] @ compile_body @ [END] @ body_defs, env
+                    [LABEL name; BEGIN (name, args, locals)] @ compile_body @ [END] @ body_defs, env
                 | [] -> [], env in
         let cdefs, _ = compile_defs env defs in
         prg @ [END] @ cdefs
