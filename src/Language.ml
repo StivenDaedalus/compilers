@@ -63,7 +63,7 @@ module Expr =
                                                             
     (* Expression evaluator
 
-          val eval : env -> config -> t -> int * config
+          val eval : env -> config -> t -> config
 
 
        Takes an environment, a configuration and an expresion, and returns another configuration. The 
@@ -72,7 +72,7 @@ module Expr =
            method definition : env -> string -> int list -> config -> config
 
        which takes an environment (of the same type), a name of the function, a list of actual parameters and a configuration, 
-       an returns a pair: the return value for the call and the resulting configuration
+       an returns resulting configuration
     *)                                                       
     let int2bool x = x !=0
     let bool2int x = if x then 1 else 0
@@ -119,8 +119,7 @@ module Expr =
 (* Expression parser. You can use the following terminals:
 
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
-         DECIMAL --- a decimal constant [0-9]+ as a string
-                                                                                                                  
+         DECIMAL --- a decimal constant [0-9]+ as a string                                                                                                                  
     *)
     ostap (                                      
       parse:
@@ -158,9 +157,6 @@ module Stmt =
     (* return statement                 *) | Return of Expr.t option
     (* call a procedure                 *) | Call   of string * Expr.t list with show
                                                                     
-    (* The type of configuration: a state, an input stream, an output stream *)
-    (*type config = State.t * int list * int list *)
-
     (* Statement evaluator
 
          val eval : env -> config -> t -> config
@@ -253,8 +249,8 @@ let eval (defs, body) i =
   let _, _, o, _ =
     Stmt.eval
       (object
-         method definition env f args (st, i, o, r) =
-           let xs, locs, s      = snd @@ M.find f m in
+         method definition env f args (st, i, o, r) =                                                                      
+           let xs, locs, s      =  snd @@ M.find f m in
            let st'              = List.fold_left (fun st (x, a) -> State.update x a st) (State.enter st (xs @ locs)) (List.combine xs args) in
            let st'', i', o', r' = Stmt.eval env (st', i, o, r) Stmt.Skip s in
            (State.leave st'' st, i', o', r')

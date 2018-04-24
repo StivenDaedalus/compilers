@@ -10,14 +10,17 @@ open Language
 (* load a variable to the stack    *) | LD    of string
 (* store a variable from the stack *) | ST    of string
 (* a label                         *) | LABEL of string
-(* unconditional jump              *) | JMP   of string                                                                                                                
+(* unconditional jump              *) | JMP   of string
 (* conditional jump                *) | CJMP  of string * string
-(* begins procedure definition     *) | BEGIN of string list * string list
+(* begins procedure definition     *) | BEGIN of string * string list * string list
 (* end procedure definition        *) | END
-(* calls a procedure               *) | CALL  of string with show
+(* calls a function/procedure      *) | CALL  of string * int * bool
+(* returns from a function         *) | RET   of bool with show
                                                    
 (* The type for the stack machine program *)                                                               
 type prg = insn list
+
+let print_prg p = List.iter (fun i -> Printf.printf "%s\n" (show(insn) i)) p
                             
 (* The type for the stack machine configuration: control stack, stack and configuration from statement
    interpreter
