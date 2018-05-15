@@ -172,20 +172,20 @@ module Expr =
           let (st, i, o, Some v) = eval env conf e in
           env#definition env "$length" [v] (st, i, o, None)
         | Binop (operation, left_expr, right_expr) ->
-          let (st', i', o', Some left_op) = eval env conf left_expr in
-          let (st'', i'', o'', Some right_op) = eval env (st', i', o', Some left_op) right_expr in
-          (st'', i'', o'', Some (Value.of_int (binop operation (Value.to_int left_op) (Value.to_int right_op))))  
-        | Call (name, args) ->
-          let rec evalArgs env conf args =
-                  match args with
-                  | expr::args' ->
-                          let (st', i', o', Some eval_arg) as conf' = eval env conf expr in
-                          let eval_args', conf' = evalArgs env conf' args' in
-                          eval_arg::eval_args', conf'
-                  |[] -> [], conf 
+          let (_, _, _, Some left_op) as conf' = eval env conf left_expr in
+          let (st', i', o', Some right_op) = eval env conf' right_expr in
+          (st', i', o', Some (Value.of_int (binop operation (Value.to_int left_op) (Value.to_int right_op))))  
+        | Call (name, args) -> (
+          let v_args, conf' =
+            List.fold_left (
+             fun (acc, conf) e -> 
+              let (_, _, _, Some v) as conf' = eval env conf e in 
+              v::acc, conf'
+            ) ([], conf) args
           in
-          let eval_args, conf' = evalArgs env conf args in
-          env#definition env name eval_args conf'
+          env#definition env name (List.rev v_args) conf'
+        )
+          
     and eval_list env conf xs =
       let vs, (st, i, o, _) =
         List.fold_left
@@ -269,9 +269,9 @@ module Stmt =
     let rec eval env ((st, i, o, r) as conf) k stmt =
         match stmt with
         | Assign (x,ind, expr) -> 
-          let (st', i', o', inds) = Expr.eval_list env conf ind in
+          let (st', i', o', ind) = Expr.eval_list env conf ind in
           let (st', i', o', Some v) = Expr.eval env (st', i', o', None) expr in
-          eval env (update st' x v inds, i', o', None) Skip k
+          eval env (update st' x v ind, i', o', None) Skip k
         | Seq (frts_stmt, scnd_stmt) -> eval env conf (
           match k with 
           | Skip -> scnd_stmt 
