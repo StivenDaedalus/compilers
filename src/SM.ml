@@ -19,9 +19,7 @@ open Language
                                                    
 (* The type for the stack machine program *)
 type prg = insn list
-
-let print_prg p = List.iter (fun i -> Printf.printf "%s\n" (show(insn) i)) p
-                            
+                           
 (* The type for the stack machine configuration: control stack, stack and configuration from statement
    interpreter
 *)
@@ -72,7 +70,7 @@ let rec eval env conf prog =
                                   else eval env (cstack, stack, tm_conf) tail
                         | _ -> failwith("Undefined suffix!")
                 )
-                | (cstack, stack, (st, input, output)), CALL (name,n , flag) -> 
+                | (cstack, stack, (st, input, output)), CALL (name, n, flag) -> 
                   if env#is_label name 
                   then eval env ((tail, st)::cstack, stack,(st, input, output)) (env#labeled name)
                   else eval env (env#builtin conf name n flag) tail
@@ -143,7 +141,7 @@ let rec compileExpr expr =
         | Language.Expr.Elem (elements, i) -> compileExpr elements @ compileExpr i @ [CALL ("$elem", 2, false)]
         | Language.Expr.Length expr -> compileExpr expr @ [CALL ("$length", 1, false)];
         | Language.Expr.Binop (operation, left_op, right_op) -> compileExpr left_op @ compileExpr right_op @ [BINOP operation]
-        | Language.Expr.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL (name, List.length args, false)]
+        | Language.Expr.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL ("L" ^ name, List.length args, false)]
 
 
 let rec compileControl st env = 
@@ -151,9 +149,9 @@ let rec compileControl st env =
         | Language.Stmt.Assign (x,[], expr) -> compileExpr expr @ [ST x], env
         | Language.Stmt.Assign (variable, indexs, expr) -> List.flatten (List.map compileExpr (indexs @ [expr])) @ [STA (variable, List.length indexs)], env
         | Language.Stmt.Seq (frts_stmt, scnd_stmt) -> 
-                let frts_stmt, env = compileControl frts_stmt env in
-                let scnd_stmt, env = compileControl scnd_stmt env in
-                 frts_stmt @ scnd_stmt, env
+                let frts, env = compileControl frts_stmt env in
+                let scnd, env = compileControl scnd_stmt env in
+                 frts @ scnd, env
         | Language.Stmt.Skip -> [], env
         | Language.Stmt.If (expr, frts_stmt, scnd_stmt) ->
                 let label_else, env = env#generate in
@@ -170,24 +168,25 @@ let rec compileControl st env =
                 let label_loop, env = env#generate in
                 let repeat_body, env = compileControl st env in
                 [LABEL label_loop] @ repeat_body @ compileExpr expr @ [CJMP ("z", label_loop)]), env
-        | Language.Stmt.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL (name, List.length args, true)], env
+        | Language.Stmt.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL ("L" ^ name, List.length args, true)], env
         | Language.Stmt.Return expr ->
           match expr with
           | None -> [RET false], env
           | Some expr -> compileExpr expr @ [RET true], env
 
 let compile (defs, stmt) = 
-        let env = object
-        val count_label = 0
-        method generate = "LABEL_" ^ string_of_int count_label, {< count_label = count_label + 1 >}
-        end in
+        let env = 
+          object
+              val count_label = 0
+              method generate = "LABEL_" ^ string_of_int count_label, {< count_label = count_label + 1 >}
+             end in
         let prg, env = compileControl stmt env in
         let rec compile_defs env defs =
                 match defs with
                 | (name, (args, locals, body))::defs' ->
                     let body_defs, env = compile_defs env defs' in
                     let compile_body, env = compileControl body env in
-                    [LABEL name; BEGIN (name, args, locals)] @ compile_body @ [END] @ body_defs, env
+                    [LABEL ("L" ^ name); BEGIN ("L" ^ name, args, locals)] @ compile_body @ [END] @ body_defs, env
                 | [] -> [], env in
         let cdefs, _ = compile_defs env defs in
         prg @ [END] @ cdefs
