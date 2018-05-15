@@ -7,11 +7,17 @@ open GT
 open Ostap
 open Combinators
 
+let list_init n f =
+  let rec init' i n f =
+    if i >= n then []
+    else (f i) :: (init' (i + 1) n f)
+  in init' 0 n f
+
 (* Values *)
 module Value =
   struct
 
-    @type t = Int of int | String of string | Array of t list with show
+    @type t = Int of int | String of string | Array of t list | Sexp of string * t list with show
 
     let to_int = function 
     | Int n -> n 
@@ -30,7 +36,7 @@ module Value =
     let of_array  a = Array  a
 
     let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
+    let update_array  a i x = list_init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
 
   end
        
@@ -150,12 +156,25 @@ module Expr =
 
     let rec eval env ((st, i, o, r) as conf) expr = 
         match expr with
-        | Const c -> (st, i, o, Some c)
+        | Const c -> (st, i, o, Some (Value.of_int c))
         | Var v -> (st, i, o, Some (State.eval st v))
+        | String s -> (st, i, o, Some (Value.of_string s))
+        | Elem (x, i) -> 
+          let (st, i, o, args) = eval_list env conf [x; i] in
+          env#definition env "$elem" args (st, i, o, None)
+        | Array xs ->
+          let (st, i, o, vs) = eval_list env conf xs in
+          env#definition env "$array" vs (st, i, o, None)
+        | Sexp (t, xs) -> 
+          let (st, i, o, vs) = eval_list env conf xs in
+          (st, i, o, Some (Value.Sexp (t, vs)))
+        | Length e ->
+          let (st, i, o, Some v) = eval env conf e in
+          env#definition env "$length" [v] (st, i, o, None)
         | Binop (operation, left_expr, right_expr) ->
           let (st', i', o', Some left_op) = eval env conf left_expr in
           let (st'', i'', o'', Some right_op) = eval env (st', i', o', Some left_op) right_expr in
-          (st'', i'', o'', Some (binop operation left_op right_op))  
+          (st'', i'', o'', Some (Value.of_int (binop operation (Value.to_int left_op) (Value.to_int right_op))))  
         | Call (name, args) ->
           let rec evalArgs env conf args =
                   match args with
@@ -167,6 +186,17 @@ module Expr =
           in
           let eval_args, conf' = evalArgs env conf args in
           env#definition env name eval_args conf'
+    and eval_list env conf xs =
+      let vs, (st, i, o, _) =
+        List.fold_left
+          (fun (acc, conf) x ->
+             let (_, _, _, Some v) as conf = eval env conf x in
+             v::acc, conf
+          )
+          ([], conf)
+          xs
+      in
+      (st, i, o, List.rev vs)
 
     let binop_transforming binoplist = List.map (fun op -> ostap($(op)), (fun left_op right_op -> Binop (op, left_op, right_op))) binoplist    
 (* Expression parser. You can use the following terminals:
@@ -188,7 +218,15 @@ module Expr =
 	
 	primary
 	);
-        primary: x:IDENT {Var x} | c:DECIMAL {Const c} | -"(" parse -")" 
+        primary: b:base is:(-"[" i:parse -"]" {`Elem i} | "." %"length" {`Len}) * {List.fold_left (fun x -> function `Elem i -> Elem (x, i) | `Len -> Length x) b is};
+        base: 
+          n:DECIMAL {Const n}
+          | s:STRING {String (String.sub s 1 (String.length s - 2))}
+          | c:CHAR {Const (Char.code c)}
+          | "[" es:!(Util.list0)[parse] "]" {Array es}
+          | "`" t:IDENT args:(-"(" !(Util.list)[parse] -")")? {Sexp (t, match args with None -> [] | Some args -> args)}
+          | x:IDENT s: ("(" args: !(Util.list0)[parse] ")" {Call (x, args)} | empty {Var x}) {s}
+          | -"(" parse -")"
     )
     
   end
@@ -204,7 +242,7 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) | Repeat of t * Expr.t
+    (* loop with a post-condition       *) | Repeat of Expr.t * t
     (* return statement                 *) | Return of Expr.t option
     (* call a procedure                 *) | Call   of string * Expr.t list
                                                                     
@@ -215,29 +253,39 @@ module Stmt =
        Takes an environment, a configuration and a statement, and returns another configuration. The 
        environment is the same as for expressions
     *)
+
+    let update st x v is =
+      let rec update a v = function
+      | []    -> v           
+      | i::tl ->
+          let i = Value.to_int i in
+          (match a with
+           | Value.String s when tl = [] -> Value.String (Value.update_string s i (Char.chr @@ Value.to_int v))
+           | Value.Array a               -> Value.Array  (Value.update_array  a i (update (List.nth a i) v tl))
+          ) 
+      in
+      State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
+
     let rec eval env ((st, i, o, r) as conf) k stmt =
-            let pleas first scnd =
-                (match scnd with
-                | Skip -> first
-                | _ -> Seq(first, scnd)) in
         match stmt with
-        | Assign (x, expr) -> 
-          let (st', i', o', Some v) = Expr.eval env conf expr in
-          eval env (State.update x v st', i', o', r) Skip k
-        | Read (x) -> eval env (State.update x (List.hd i) st, List.tl i, o, r) Skip k
-        | Write (expr) -> 
-          let (st', i', o', Some v) = Expr.eval env conf expr in
-          eval env (st', i', o @ [v], r) Skip k
-        | Seq (frts_stmt, scnd_stmt) -> eval env conf (pleas scnd_stmt k) frts_stmt
+        | Assign (x,ind, expr) -> 
+          let (st', i', o', inds) = Expr.eval_list env conf ind in
+          let (st', i', o', Some v) = Expr.eval env (st', i', o', None) expr in
+          eval env (update st' x v inds, i', o', None) Skip k
+        | Seq (frts_stmt, scnd_stmt) -> eval env conf (
+          match k with 
+          | Skip -> scnd_stmt 
+          | _ -> Seq (scnd_stmt, k) 
+        ) frts_stmt
         | Skip -> 
           (match k with
           | Skip -> conf
           | _ -> eval env conf Skip k)
         | If (expr, frts_stmt, scnd_stmt) -> 
           let (st', i', o', Some v) = Expr.eval env conf expr in
-          eval env conf k (if v <> 0 then frts_stmt else scnd_stmt)
+          eval env conf k (if Value.to_int v <> 0 then frts_stmt else scnd_stmt)
         | While (expr, st) -> eval env conf k (If (expr, Seq (st, While (expr, st)), Skip))
-        | Repeat (st, expr) -> eval env conf k (Seq (st, If (expr, Skip, Repeat (st, expr))))
+        | Repeat (expr, st) -> eval env conf k (Seq (st, If (expr, Skip, Repeat (expr, st))))
         | Return expr ->
           (match expr with
           | None -> conf
@@ -247,19 +295,18 @@ module Stmt =
     (* Statement parser *)
     ostap (
       parse: seq | stmt;
-      stmt: assign | read | write | if_ | while_ | for_ | repeat_ | skip | call;
-      assign: x:IDENT -":=" expr:!(Expr.parse) {Assign (x, expr)};
-      read: -"read" -"(" x:IDENT -")" {Read x};
-      write: -"write" -"("expr:!(Expr.parse) -")" {Write expr};
+      stmt: assign | if_ | while_ | for_ | repeat_ | skip | call | return;
+      assign: x:IDENT index:(-"[" !(Expr.parse) -"]")* -":=" expr:!(Expr.parse) {Assign (x,index, expr)};
       if_: "if" expr:!(Expr.parse) "then" st:parse "fi" {If (expr, st, Skip)} 
          | "if" expr:!(Expr.parse) "then" frts_stmt:parse else_elif:else_or_elif "fi" {If (expr, frts_stmt, else_elif)}; else_or_elif: else_ | elif_;
       else_: "else" st:parse {st};
       elif_: "elif" expr:!(Expr.parse) "then" frts_stmt:parse scnd_stmt:else_or_elif {If (expr, frts_stmt, scnd_stmt)};
       while_: "while" expr:!(Expr.parse) "do" st:parse "od" {While (expr, st)};
       for_: "for" init:parse "," expr:!(Expr.parse) "," frts_stmt:parse "do" scnd_stmt:parse "od" {Seq (init, While (expr, Seq(scnd_stmt, frts_stmt)))};
-      repeat_: "repeat" st:parse "until" expr:!(Expr.parse) {Repeat (st, expr)};
+      repeat_: "repeat" st:parse "until" expr:!(Expr.parse) {Repeat (expr, st)};
       skip: "skip" {Skip};
       call: x:IDENT "(" args:!(Util.list0)[Expr.parse] ")" {Call (x, args)};
+      return: "return" e:!(Expr.parse)? {Return e};
       seq: frts_stmt:stmt -";" scnd_stmt:parse {Seq (frts_stmt, scnd_stmt)}
     )
       

@@ -33,38 +33,49 @@ type config = (prg * State.t) list * Value.t list * Expr.config
 
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
-*)                         
+*) 
+let split n l =
+  let rec unzip (taken, rest) = function
+  | 0 -> (List.rev taken, rest)
+  | n -> let h::tl = rest in unzip (h::taken, tl) (n-1)
+  in
+  unzip ([], l) n  
+                      
 let rec eval env conf prog =
         match prog with
         | [] -> conf
         |inst::tail -> (
                 match conf, inst with
                 | (cstack, y::x::stack, tm_conf), BINOP operation -> 
-                        let value = Language.Expr.binop operation x y in
-                        eval env (cstack, value::stack, tm_conf) tail
+                        let value = Language.Expr.binop operation(Value.to_int x) (Value.to_int y) in
+                        eval env (cstack, (Value.of_int value)::stack, tm_conf) tail
                 | (cstack, stack, tm_conf), CONST value ->
-                        eval env (cstack, value::stack, tm_conf) tail
-		| (cstack, stack, (st, z::input, output)), READ -> 
-                        eval env (cstack, z::stack, (st, input, output)) tail
-                | (cstack, z::stack, (st, input, output)), WRITE -> 
-                        eval env (cstack, stack, (st, input, output @ [z])) tail
+                        eval env (cstack, (Value.of_int value)::stack, tm_conf) tail
+                | (cstack, stack, stmt_conf), STRING str -> 
+                        eval env (cstack, (Value.of_string str)::stack, stmt_conf) tail
 		| (cstack, stack, (st, input, output)), LD x -> 
                         let value = State.eval st x in
                         eval env (cstack, value::stack, (st, input, output)) tail
                 | (cstack, z::stack, (st, input, output)), ST x -> 
 			let stt = State.update x z st in
                         eval env (cstack, stack, (stt, input, output)) tail
+                | (cstack, stack, (st, input, output)), STA (variable, n) -> 
+                  let v::ind, stack' = split (n + 1) stack in 
+                  eval env (cstack, stack', (Language.Stmt.update st variable v (List.rev ind), input, output)) tail
                 | conf, LABEL label -> eval env conf tail
                 | conf, JMP label -> eval env conf (env#labeled label)
                 | (cstack, z::stack, tm_conf), CJMP (suf, label) -> (
                         match suf with
-                        | "z" -> if z == 0 then eval env (cstack, stack, tm_conf) (env#labeled label)
+                        | "z" -> if Value.to_int z == 0 then eval env (cstack, stack, tm_conf) (env#labeled label)
                                  else eval env (cstack, stack, tm_conf) tail
-                        | "nz" -> if z <> 0 then eval env (cstack, stack, tm_conf) (env#labeled label)
+                        | "nz" -> if Value.to_int z <> 0 then eval env (cstack, stack, tm_conf) (env#labeled label)
                                   else eval env (cstack, stack, tm_conf) tail
                         | _ -> failwith("Undefined suffix!")
                 )
-                | (cstack, stack, (st, input, output)), CALL (name, _ , _) -> eval env ((tail, st)::cstack, stack,(st, input, output)) (env#labeled name)
+                | (cstack, stack, (st, input, output)), CALL (name,n , flag) -> 
+                  if env#is_label name 
+                  then eval env ((tail, st)::cstack, stack,(st, input, output)) (env#labeled name)
+                  else eval env (env#builtin conf name n flag) tail
                 | (cstack, stack, (st, input, output)), BEGIN (_, args, locals) -> 
                         let rec associate st args stack =
                                 match args, stack with
@@ -127,15 +138,18 @@ let rec compileExpr expr =
         match expr with
         | Language.Expr.Const c -> [CONST c]
         | Language.Expr.Var x -> [LD x]
+        | Language.Expr.String str -> [STRING str]
+        | Language.Expr.Array elements -> List.flatten (List.map compileExpr elements) @ [CALL ("$array", List.length elements, false)]
+        | Language.Expr.Elem (elements, i) -> compileExpr elements @ compileExpr i @ [CALL ("$elem", 2, false)]
+        | Language.Expr.Length expr -> compileExpr expr @ [CALL ("$length", 1, false)];
         | Language.Expr.Binop (operation, left_op, right_op) -> compileExpr left_op @ compileExpr right_op @ [BINOP operation]
         | Language.Expr.Call (name, args) -> List.concat (List.map compileExpr (List.rev args)) @ [CALL (name, List.length args, false)]
 
 
 let rec compileControl st env = 
         match st with
-        | Language.Stmt.Assign (x, expr) -> compileExpr expr @ [ST x], env
-        | Language.Stmt.Read x -> [READ; ST x], env
-        | Language.Stmt.Write expr -> compileExpr expr @ [WRITE], env
+        | Language.Stmt.Assign (x,[], expr) -> compileExpr expr @ [ST x], env
+        | Language.Stmt.Assign (variable, indexs, expr) -> List.flatten (List.map compileExpr (indexs @ [expr])) @ [STA (variable, List.length indexs)], env
         | Language.Stmt.Seq (frts_stmt, scnd_stmt) -> 
                 let frts_stmt, env = compileControl frts_stmt env in
                 let scnd_stmt, env = compileControl scnd_stmt env in
@@ -152,7 +166,7 @@ let rec compileControl st env =
                 let label_loop, env = env#generate in
                 let while_body, env = compileControl st env in
                 [JMP label_check; LABEL label_loop] @ while_body @ [LABEL label_check] @ compileExpr expr @ [CJMP ("nz", label_loop)], env
-        | Language.Stmt.Repeat (st, expr) ->(
+        | Language.Stmt.Repeat (expr, st) ->(
                 let label_loop, env = env#generate in
                 let repeat_body, env = compileControl st env in
                 [LABEL label_loop] @ repeat_body @ compileExpr expr @ [CJMP ("z", label_loop)]), env
