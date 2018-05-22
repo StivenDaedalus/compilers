@@ -31,9 +31,14 @@ module Value =
     | Array a -> a
     | _       -> failwith "array value expected"
 
+    let sexp   s vs = Sexp (s, vs)
     let of_int    n = Int    n
     let of_string s = String s
     let of_array  a = Array  a
+
+    let tag_of = function
+    | Sexp (t, _) -> t
+    | _ -> failwith "symbolic expression expected"
 
     let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
     let update_array  a i x = list_init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
@@ -45,47 +50,80 @@ module State =
   struct
                                                                 
     (* State: global state, local state, scope variables *)
-    type t = {g : string -> Value.t; l : string -> Value.t; scope : string list}
+    type t =
+    | G of (string -> Value.t)
+    | L of string list * (string -> Value.t) * t
+
+    (* Undefined state *)
+    let undefined x = failwith (Printf.sprintf "Undefined variable: %s" x)
+
+    (* Bind a variable to a value in a state *)
+    let bind x v s = fun y -> if x = y then v else s y 
 
     (* Empty state *)
-    let empty =
-      let e x = failwith (Printf.sprintf "Undefined variable: %s" x) in
-      {g = e; l = e; scope = []}
+    let empty = G undefined
 
     (* Update: non-destructively "modifies" the state s by binding the variable x 
        to value v and returns the new state w.r.t. a scope
     *)
     let update x v s =
-      let u x v s = fun y -> if x = y then v else s y in
-      if List.mem x s.scope then {s with l = u x v s.l} else {s with g = u x v s.g}
+      let rec inner = function
+      | G s -> G (bind x v s)
+      | L (scope, s, enclosing) ->
+         if List.mem x scope then L (scope, bind x v s, enclosing) else L (scope, s, inner enclosing)
+      in
+      inner s
 
     (* Evals a variable in a state w.r.t. a scope *)
-    let eval s x = (if List.mem x s.scope then s.l else s.g) x
+    let rec eval s x =
+      match s with
+      | G s -> s x
+      | L (scope, s, enclosing) -> if List.mem x scope then s x else eval enclosing x
 
     (* Creates a new scope, based on a given state *)
-    let enter st xs = {empty with g = st.g; scope = xs}
+    let rec enter st xs =
+      match st with
+      | G _         -> L (xs, undefined, st)
+      | L (_, _, e) -> enter e xs
 
     (* Drops a scope *)
-    let leave st st' = {st' with g = st.g}
+    let leave st st' =
+      let rec get = function
+      | G _ as st -> st
+      | L (_, _, e) -> get e
+      in
+      let g = get st in
+      let rec recurse = function
+      | L (scope, s, e) -> L (scope, s, recurse e)
+      | G _             -> g
+      in
+      recurse st'
 
+    (* Push a new local scope *)
+    let push st s xs = L (xs, s, st)
+
+    (* Drop a local scope *)
+    let drop (L (_, _, e)) = e
+                               
   end
 
 (* Builtins *)
 module Builtin =
   struct
-
+      
     let eval (st, i, o, _) args = function
     | "read"     -> (match i with z::i' -> (st, i', o, Some (Value.of_int z)) | _ -> failwith "Unexpected end of input")
     | "write"    -> (st, i, o @ [Value.to_int @@ List.hd args], None)
-    | "$elem"    -> let [b; j] = args in
+    | ".elem"    -> let [b; j] = args in
                     (st, i, o, let i = Value.to_int j in
                                Some (match b with
-                                     | Value.String s -> Value.of_int @@ Char.code s.[i]
-                                     | Value.Array  a -> List.nth a i
+                                     | Value.String   s  -> Value.of_int @@ Char.code s.[i]
+                                     | Value.Array    a  -> List.nth a i
+                                     | Value.Sexp (_, a) -> List.nth a i
                                )
                     )         
-    | "$length"  -> (st, i, o, Some (Value.of_int (match List.hd args with Value.Array a -> List.length a | Value.String s -> String.length s)))
-    | "$array"   -> (st, i, o, Some (Value.of_array args))
+    | ".length"  -> (st, i, o, Some (Value.of_int (match List.hd args with Value.Array a -> List.length a | Value.String s -> String.length s)))
+    | ".array"   -> (st, i, o, Some (Value.of_array args))
     | "isArray"  -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.Array  _ -> 1 | _ -> 0))
     | "isString" -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.String _ -> 1 | _ -> 0))                     
        
@@ -235,17 +273,40 @@ module Expr =
 module Stmt =
   struct
 
+    (* Patterns in statements *)
+    module Pattern =
+      struct
+
+        (* The type for patterns *)
+        @type t =
+        (* wildcard "-"     *) | Wildcard
+        (* S-expression     *) | Sexp   of string * t list
+        (* identifier       *) | Ident  of string
+        with show, foldl
+
+        (* Pattern parser *)                                 
+        ostap (
+          parse: empty {failwith "Not implemented"}
+        )
+        
+        let vars p =
+          transform(t) (object inherit [string list] @t[foldl] method c_Ident s _ name = name::s end) [] p
+        
+      end
+        
     (* The type for statements *)
-    type t =
+    @type t =
     (* assignment                       *) | Assign of string * Expr.t list * Expr.t
     (* composition                      *) | Seq    of t * t 
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) | Repeat of Expr.t * t
+    (* loop with a post-condition       *) | Repeat of t * Expr.t
+    (* pattern-matching                 *) | Case   of Expr.t * (Pattern.t * t) list
     (* return statement                 *) | Return of Expr.t option
-    (* call a procedure                 *) | Call   of string * Expr.t list
-                                                                    
+    (* call a procedure                 *) | Call   of string * Expr.t list 
+    (* leave a scope                    *) | Leave  with show
+                                                                                   
     (* Statement evaluator
 
          val eval : env -> config -> t -> config

@@ -5,7 +5,8 @@ open Language
 @type insn =
 (* binary operator                 *) | BINOP   of string
 (* put a constant on the stack     *) | CONST   of int
-(* put a string on the stack       *) | STRING  of string                      
+(* put a string on the stack       *) | STRING  of string
+(* create an S-expression          *) | SEXP    of string * int
 (* load a variable to the stack    *) | LD      of string
 (* store a variable from the stack *) | ST      of string
 (* store in an array               *) | STA     of string * int
@@ -15,11 +16,20 @@ open Language
 (* begins procedure definition     *) | BEGIN   of string * string list * string list
 (* end procedure definition        *) | END
 (* calls a function/procedure      *) | CALL    of string * int * bool
-(* returns from a function         *) | RET     of bool with show
+(* returns from a function         *) | RET     of bool
+(* drops the top element off       *) | DROP
+(* duplicates the top element      *) | DUP
+(* swaps two top elements          *) | SWAP
+(* checks the tag of S-expression  *) | TAG     of string
+(* enters a scope                  *) | ENTER   of string list
+(* leaves a scope                  *) | LEAVE
+with show
                                                    
 (* The type for the stack machine program *)
 type prg = insn list
-                           
+
+let print_prg p = List.iter (fun i -> Printf.printf "%s\n" (show(insn) i)) p
+                            
 (* The type for the stack machine configuration: control stack, stack and configuration from statement
    interpreter
 *)
@@ -31,7 +41,7 @@ type config = (prg * State.t) list * Value.t list * Expr.config
 
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
-*) 
+*)                                                  
 let split n l =
   let rec unzip (taken, rest) = function
   | 0 -> (List.rev taken, rest)
@@ -98,7 +108,7 @@ let rec eval env conf prog =
    Takes a program, an input stream, and returns an output stream this program calculates
 *)
 let run p i =
-  (*print_prg p;*)
+  (* print_prg p; *)
   let module M = Map.Make (String) in
   let rec make_map m = function
   | []              -> m
