@@ -199,16 +199,16 @@ module Expr =
         | String s -> (st, i, o, Some (Value.of_string s))
         | Elem (x, i) -> 
           let (st, i, o, args) = eval_list env conf [x; i] in
-          env#definition env "$elem" args (st, i, o, None)
+          env#definition env ".elem" args (st, i, o, None)
         | Array xs ->
           let (st, i, o, vs) = eval_list env conf xs in
-          env#definition env "$array" vs (st, i, o, None)
+          env#definition env ".array" vs (st, i, o, None)
         | Sexp (t, xs) -> 
           let (st, i, o, vs) = eval_list env conf xs in
           (st, i, o, Some (Value.Sexp (t, vs)))
         | Length e ->
           let (st, i, o, Some v) = eval env conf e in
-          env#definition env "$length" [v] (st, i, o, None)
+          env#definition env ".length" [v] (st, i, o, None)
         | Binop (operation, left_expr, right_expr) ->
           let (_, _, _, Some left_op) as conf' = eval env conf left_expr in
           let (st', i', o', Some right_op) = eval env conf' right_expr in
@@ -286,7 +286,9 @@ module Stmt =
 
         (* Pattern parser *)                                 
         ostap (
-          parse: empty {failwith "Not implemented"}
+          parse: "_" {Wildcard}
+          | "`" t: IDENT ps: (-"(" !(Util.list)[parse] -")")? { Sexp (t, match ps with None -> [] | Some ps -> ps) }
+          | x: IDENT {Ident x}
         )
         
         let vars p =
@@ -301,7 +303,7 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) | Repeat of t * Expr.t
+    (* loop with a post-condition       *) | Repeat of Expr.t * t
     (* pattern-matching                 *) | Case   of Expr.t * (Pattern.t * t) list
     (* return statement                 *) | Return of Expr.t option
     (* call a procedure                 *) | Call   of string * Expr.t list 
@@ -351,7 +353,38 @@ module Stmt =
           (match expr with
           | None -> conf
           | Some expr -> Expr.eval env conf expr)
-        | Call (f, expr)  -> eval env (Expr.eval env conf (Expr.Call (f, expr))) Skip k;;
+        | Call (f, expr)  -> eval env (Expr.eval env conf (Expr.Call (f, expr))) Skip k
+        | Case (e, bs) ->
+          let (_, _, _, Some v) as conf' = Expr.eval env conf e in 
+          let rec branch ((st, i, o, _) as conf) = function
+          | [] -> failwith("No branch selected")
+          | (patt, body)::tl -> 
+            let rec match_patt patt v st =
+              let update x v = function
+              | None -> None
+              | Some s -> Some (State.bind x v s)
+              in
+              match patt, v with
+              | Pattern.Ident x, v -> update x v st
+              | Pattern.Wildcard, _ -> st
+              | Pattern.Sexp (t, ps), Value.Sexp (t', vs) when t = t' -> match_list ps vs st
+              | _ -> None
+            and match_list ps vs s =
+              match ps, vs with
+              | [], [] -> s
+              | p::ps, v::vs -> match_list ps vs (match_patt p v s)
+              | _ -> None
+            in
+            match match_patt patt v (Some State.undefined) with
+            | None -> branch conf tl
+            | Some st' -> eval env (State.push st st' (Pattern.vars patt), i, o, None) k (Seq (body, Leave))
+          in
+          branch conf' bs
+        | Leave -> eval env (State.drop st, i, o, r) Skip k
+        | Return e ->
+          (match e with
+          | None -> conf
+          | Some e -> Expr.eval env conf e);;
                                
     (* Statement parser *)
     ostap (
@@ -368,7 +401,8 @@ module Stmt =
       skip: "skip" {Skip};
       call: x:IDENT "(" args:!(Util.list0)[Expr.parse] ")" {Call (x, args)};
       return: "return" e:!(Expr.parse)? {Return e};
-      seq: frts_stmt:stmt -";" scnd_stmt:parse {Seq (frts_stmt, scnd_stmt)}
+      seq: frts_stmt:stmt -";" scnd_stmt:parse {Seq (frts_stmt, scnd_stmt)};
+      case: "case" e:!(Expr.parse) "of" branches: !(Util.listBy)[ostap ("|")][ostap (!(Pattern.parse) -"->" parse)] "esac" {Case (e, branches)}
     )
       
   end
