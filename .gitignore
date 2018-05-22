@@ -2,3 +2,7 @@
 *.cmi
 *.cmx
 *.o
+*.depend
+*.opt
+*.orig
+*.tex
