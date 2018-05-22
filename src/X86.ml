@@ -131,6 +131,12 @@ let compile env code =
       in
       (if p then env, code else let y, env = env#allocate in env, code @ [Mov (eax, y)])
     in
+    let getCode = function
+		    | c   -> if (c > 'Z')
+                             then Char.code c - 70
+                             else Char.code c - 64 
+                    | '_' -> 53
+    in 
     match scode with
     | [] -> env, []
     | instr :: scode' ->
@@ -251,6 +257,18 @@ let compile env code =
              else env, [Jmp env#epilogue]
              
           | CALL (f, n, p) -> call env f n p
+          | SEXP (t, n)    -> let reprSexp s = 
+                                let tagL = String.length s in
+                                let srt  = String.sub s 0 (min tagL 5) in
+		                let rec reprTag tg l br k = if (l > k) 
+                                                            then br else
+                                                            reprTag tg l ((br lsl 6) lor 
+                                                                          (getCode tg.[k])) (k + 1) 
+                                in reprTag srt tagL 0 0
+                                in
+                                let env', ex = call env ".sexp" (n + 1) true in
+                                  env', [Push (L (reprSexp t))] @ 
+                                        ex
         in
         let env'', code'' = compile' env' scode' in
 	env'', code' @ code''

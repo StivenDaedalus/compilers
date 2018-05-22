@@ -152,41 +152,36 @@ let compile (defs, p) =
   let rec call f args p =
     let args_code = List.concat @@ List.map expr args in
     args_code @ [CALL (f, List.length args, p)]
-  and pattern p lfalse =
-    (let rec comp pat =
-      (match pat with
-        Stmt.Pattern.Wildcard -> [DROP]
-        | Stmt.Pattern.Ident x -> [DROP]
-        | Stmt.Pattern.Sexp (tag, ps) ->
-          let res, _ = (List.fold_left (fun (acc, pos) patt -> (acc @ [DUP; CONST pos; CALL (".elem", 2, false)] @ (comp patt)), pos + 1) ([], 0) ps) in
-          [DUP; TAG tag; CJMP ("z", lfalse)] @ res) in
-          comp p)
+  and pattern lfalse = function
+    | Stmt.Pattern.Wildcard -> [DROP]
+    | Stmt.Pattern.Ident _ -> [DROP]
+    | Stmt.Pattern.Sexp (tag_name, xs) -> [DUP; TAG tag_name; CJMP ("z", lfalse)] @ List.concat (List.mapi (fun i x -> [DUP; CONST i; CALL (".elem", 2, false)] @ pattern lfalse x) xs)
+    | _ -> [JMP lfalse]
   and bindings p =
-    let rec bind cp =
-      (match cp with
-        Stmt.Pattern.Wildcard -> [DROP]
-        | Stmt.Pattern.Ident x -> [SWAP]
-        | Stmt.Pattern.Sexp (_, xs) ->
-          let res, _ = List.fold_left (fun (acc, pos) curp -> (acc @ [DUP; CONST pos; CALL (".elem", 2, false)] @ bind curp, pos + 1)) ([], 0) xs in res @ [DROP]) in
-    bind p @ [ENTER (Stmt.Pattern.vars p)]
+    let rec inner = function
+      | Stmt.Pattern.Wildcard -> [DROP]
+      | Stmt.Pattern.Ident x -> [SWAP]
+      | Stmt.Pattern.Sexp (_, xs) -> List.concat (List.mapi (fun i x -> [DUP; CONST i; CALL (".elem", 2, false)] @ inner x) xs) @ [DROP]
+    in
+    inner p @ [ENTER (Stmt.Pattern.vars p)]
   and expr e =
     match e with
       | Expr.Const c -> [CONST c]
       | Expr.Var x -> [LD x]
       | Expr.String str -> [STRING str]
-      | Expr.Sexp (s, exprs) -> let args = List.fold_left (fun acc index -> acc @ (expr index)) [] exprs in args @ [SEXP (s, List.length exprs)]
+      | Expr.Sexp (s, exprs) -> (List.concat (List.map expr exprs)) @ [SEXP (s, List.length exprs)]
       | Expr.Array elements -> call ".array" elements false
       | Expr.Elem (elements, i) -> call ".elem" [elements; i] false
       | Expr.Length expr -> call ".length" [expr] false
       | Expr.Binop (operation, left_op, right_op) -> expr left_op @ expr right_op @ [BINOP operation]
-      | Expr.Call (name, args) -> call (label name) args false
+      | Expr.Call (name, args) -> call (label name) (List.rev args) false
   in
   let rec compile_stmt l env stmt = 
     match stmt with
     | Stmt.Assign (x,[], e) -> env, false, expr e @ [ST x]
     | Stmt.Assign (variable, indexs, e) -> 
-      let indexes = List.fold_left (fun acc index -> acc @ (expr index)) [] indexs in 
-      env, false, (List.rev indexes @ expr e @ [STA (variable, List.length indexs)])
+      let code = List.concat (List.map expr (indexs @ [e])) @ [STA (variable, List.length indexs)] in 
+      env, false, code
     | Stmt.Seq (frts_stmt, scnd_stmt) -> 
       let env, _, frst = compile_stmt l env frts_stmt in
       let env, _, scnd = compile_stmt l env scnd_stmt in
@@ -207,21 +202,21 @@ let compile (defs, p) =
       let label_loop, env = env#get_label in
       let env, _,  repeat_body = compile_stmt l env st in
       env, false, [LABEL label_loop] @ repeat_body @ expr e @ [CJMP ("z", label_loop)])
-    | Stmt.Call (name, args) -> env, false, call (label name) args true
+    | Stmt.Call (name, args) -> env, false, call (label name) (List.rev args) true
     | Stmt.Leave -> env, false, [LEAVE]
-    | Stmt.Case (e, ptrns) ->
-      let rec comp_pat ps env lbl isFirst lend =
-        (match ps with
-          [] -> env, []
-          | (p, act)::tl ->
-            let env, _, body = compile_stmt l env act in
-            let lfalse, env = env#get_label
-            and start = if isFirst then [] else [LABEL lbl] in
-            let env, code = comp_pat tl env lfalse false lend in
-            env, start @ (pattern p lfalse) @ bindings p @ body @ [LEAVE; JMP lend] @ code) in
-        let lend, env = env#get_label in
-        let env, code = comp_pat ptrns env "" true lend in
-        env, false, (expr e) @ code @ [LABEL lend]
+    | Stmt.Case (e, bs) -> (
+      let lend, env = env#get_label in
+      let rec traverse branches env lbl n =
+          match branches with
+          | [] -> env, []
+          | (pat, body)::branches' -> (
+            let env, _, body_compiled = compile_stmt l env body in
+            let lfalse, env = if n = 0 then lend, env else env#get_label in
+            let env, code = traverse branches' env (Some lfalse) (n - 1) in
+            env, (match lbl with None -> [] | Some l -> [LABEL l]) @ (pattern lfalse pat) @ bindings pat @ body_compiled @ [LEAVE] @ (if n = 0 then [] else [JMP lend]) @ code )
+      in
+      let env, code = traverse bs env None (List.length bs - 1) in
+      env, false, expr e @ code @ [LABEL lend] ) 
     | Stmt.Return e -> (
       match e with
       | None -> env, false, [RET false]

@@ -389,7 +389,7 @@ module Stmt =
     (* Statement parser *)
     ostap (
       parse: seq | stmt;
-      stmt: assign | if_ | while_ | for_ | repeat_ | skip | call | return;
+      stmt: assign | if_ | while_ | for_ | repeat_ | skip | call | return | case;
       assign: x:IDENT index:(-"[" !(Expr.parse) -"]")* -":=" expr:!(Expr.parse) {Assign (x,index, expr)};
       if_: "if" expr:!(Expr.parse) "then" st:parse "fi" {If (expr, st, Skip)} 
          | "if" expr:!(Expr.parse) "then" frts_stmt:parse else_elif:else_or_elif "fi" {If (expr, frts_stmt, else_elif)}; else_or_elif: else_ | elif_;
