@@ -316,7 +316,6 @@ module Stmt =
        Takes an environment, a configuration and a statement, and returns another configuration. The 
        environment is the same as for expressions
     *)
-
     let update st x v is =
       let rec update a v = function
       | []    -> v           
